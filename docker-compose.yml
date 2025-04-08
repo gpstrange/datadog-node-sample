@@ -1,0 +1,115 @@
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector:0.120.0
+    command: [ "--config=/etc/otel-collector.yaml" ]
+    volumes:
+      - ./etc/otel-collector.yaml:/etc/otel-collector.yaml
+    ports:
+      - "1888:1888"   # pprof extension
+      - "8888:8888"   # Prometheus metrics exposed by the collector
+      - "8889:8889"   # Prometheus exporter metrics
+      - "13133:13133" # health_check extension
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+      - "55679:55679" # zpages extension
+    depends_on:
+      - tempo
+      - prometheus
+
+  tempo:
+    image: grafana/tempo:2.7.1
+    command: [ "-config.file=/etc/tempo.yaml" ]
+    volumes:
+      - ./etc/tempo.yaml:/etc/tempo.yaml
+      - ./data/tempo-data:/tmp/tempo
+    ports:
+      - "14268" # jaeger ingest
+      - "3200"  # tempo
+      - "4317"  # otlp grpc
+      - "4318"  # otlp http
+      - "9411"  # zipkin
+
+  loki:
+    image: grafana/loki:2.9.12
+    command: -config.file=/etc/loki/loki.yaml
+    ports:
+      - "3100:3100" # loki needs to be exposed so it receives logs
+    environment:
+      - JAEGER_AGENT_HOST=tempo
+      - JAEGER_ENDPOINT=http://tempo:14268/api/traces # send traces to Tempo
+      - JAEGER_SAMPLER_TYPE=const
+      - JAEGER_SAMPLER_PARAM=1
+    volumes:
+      - ./etc/loki.yaml:/etc/loki/loki.yaml
+      - ./data/loki-data:/tmp/loki
+
+  promtail:
+    image: grafana/promtail:2.9.12
+    volumes:
+      - ./etc/promtail-config.yaml:/etc/promtail/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: -config.file=/etc/promtail/config.yaml
+    depends_on:
+      - loki
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    volumes:
+      - ./etc/prometheus.yaml:/etc/prometheus.yaml
+    command:
+      - --config.file=/etc/prometheus.yaml
+      - --web.enable-remote-write-receiver
+      - --enable-feature=exemplar-storage
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    volumes:
+      - /Users/tyke/tyke/kubesense/sample-apps/nestjs-otel-prom-grafana-tempo/data/grafana-data/datasources:/etc/grafana/provisioning/datasources
+      - /Users/tyke/tyke/kubesense/sample-apps/nestjs-otel-prom-grafana-tempo/data/grafana-data/dashboards-provisioning:/etc/grafana/provisioning/dashboards
+      - /Users/tyke/tyke/kubesense/sample-apps/nestjs-otel-prom-grafana-tempo/data/grafana-data/dashboards:/var/lib/grafana/dashboards
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+
+  actor:
+    build: ./services/actor
+    ports:
+      - 5555:5555
+      - 8081:8081
+    volumes:
+      - ./data/logs:/app/logs
+    environment:
+      OTEL_SERVICE_NAME: actor
+      OTEL_RESOURCE_ATTRIBUTES: kubesense.env_type=legacy,kubesense.cluster=pi42
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://dev.kubesense.ai:33443/v1/traces
+      OTEL_NODE_RESOURCE_DETECTORS: env,host,os,process
+      NODE_OPTIONS: "--require @opentelemetry/auto-instrumentations-node/register"
+      OTEL_LOG_LEVEL: debug
+    depends_on:
+      - otel-collector
+
+  movie:
+    build: ./services/movie
+    ports:
+      - 5556:5555
+      - 8082:8081
+    volumes:
+      - ./data/logs:/app/logs
+    environment:
+      OTEL_SERVICE_NAME: movie
+      OTEL_RESOURCE_ATTRIBUTES: kubesense.env_type=legacy,kubesense.cluster=pi42
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://dev.kubesense.ai:33443/v1/traces
+      OTEL_NODE_RESOURCE_DETECTORS: env,host,os,process
+      NODE_OPTIONS: "--require @opentelemetry/auto-instrumentations-node/register"
+      OTEL_LOG_LEVEL: debug
+    depends_on:
+      - otel-collector

@@ -1,0 +1,32 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+      http:
+        cors:
+          allowed_origins:
+            - http://*
+            - https://*
+
+# processors:
+#   attribute:
+#     actions:
+#       - key: "service.name"
+#         value: "nestjs-otel-prom-grafana-tempo"
+#         action: "upsert"
+#       - key: "environment"
+#         value: "dev"
+#         action: "upsert"
+exporters:
+  debug:
+    verbosity: detailed
+  otlphttp:
+    endpoint: http://dev.kubesense.ai:33443
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlphttp,debug]
